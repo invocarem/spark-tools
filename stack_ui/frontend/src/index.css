@@ -97,16 +97,6 @@ select {
   font-size: 0.9rem;
 }
 
-.row {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: 0.75rem;
-}
-
-.row label {
-  margin-bottom: 0.5rem;
-}
-
 .hint {
   font-size: 0.82rem;
   color: var(--muted);
@@ -279,9 +269,5 @@ details.adv[open] summary {
   .span2,
   .span3 {
     grid-column: span 1;
-  }
-
-  .row {
-    grid-template-columns: 1fr;
   }
 }

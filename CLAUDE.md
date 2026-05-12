@@ -20,6 +20,14 @@ Single-file CLI (`sglang_runtime.py`) for deploying, launching, stopping, and mo
 - **NCCL env**: Any key in `_NCCL_ENV_KEYS` list is exported before launch when present in the loaded env
 - **Deploy sets**: Named collections of `remote_dir`, `sources`, `exclude` stored in `deploy_sets.json` (optional, at repo root)
 
+### `stack_ui/` — Stack web console
+
+FastAPI backend plus Vite + React + TypeScript frontend for **sglang_runtime** (presets, preview, launch/stop/logs, scan). Run from repo root; see `stack_ui/README.md`.
+
+- **API**: `cd stack_ui/backend && uvicorn stack_ui_server:app --host 127.0.0.1 --port 8765`
+- **Dev UI**: `cd stack_ui/frontend && npm install && npm run dev` (proxies `/api` to port 8765)
+- **Legacy**: `sglang_runtime/web_ui/server.py` re-exports the same `app` for `uvicorn web_ui.server:app` from `sglang_runtime/`
+
 ### `hf_download/` — Hugging Face model download
 
 Downloads a full HF repo using `huggingface_hub.snapshot_download`. No `transformers` dependency.

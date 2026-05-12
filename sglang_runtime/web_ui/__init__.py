@@ -1,1 +1,1 @@
-"""Local web control panel for ``sglang_runtime`` (FastAPI + static UI)."""
+"""Shim package: Stack UI is under ``stack_ui/``; see ``web_ui/README.md``."""
