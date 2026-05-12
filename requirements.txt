@@ -1,0 +1,16 @@
+# Third-party dependencies for spark-tools
+# Install all:  pip install -r requirements.txt
+# Per-tool subsets noted below.
+
+# hf_download: Hugging Face model download
+huggingface_hub
+
+# hf_transfer: PyTorch distributed (NCCL/Gloo) model transfer
+torch
+numpy
+
+# hf_transfer: parallel TCP fallback (optional)
+pyzmq
+
+# hf_transfer: .env loading (optional)
+python-dotenv
