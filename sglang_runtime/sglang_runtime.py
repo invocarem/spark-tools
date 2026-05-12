@@ -424,6 +424,7 @@ def merge_preset_launch_fields(
     override_tp: int | None,
     override_port: int | None,
     extra_sglang_args: list[str],
+    preset_sglang_args: list[str] | None = None,
 ) -> MergedPresetLaunch:
     presets = load_presets(presets_file)
     if preset_name not in presets:
@@ -468,8 +469,13 @@ def merge_preset_launch_fields(
             30000,
         )
     )
+    base_preset_sglang = (
+        list(preset_sglang_args)
+        if preset_sglang_args is not None
+        else get_preset_sglang_args(preset)
+    )
     merged_args = [
-        *get_preset_sglang_args(preset),
+        *base_preset_sglang,
         *shlex.split(env_lookup(env, "SGLANG_EXTRA_ARGS") or ""),
         *extra_sglang_args,
     ]
@@ -495,6 +501,7 @@ def build_dashboard_source_launch_command(
     override_tp: int | None,
     override_port: int | None,
     extra_sglang_args: list[str],
+    preset_sglang_args: list[str] | None = None,
 ) -> str:
     merged = merge_preset_launch_fields(
         presets_file,
@@ -505,6 +512,7 @@ def build_dashboard_source_launch_command(
         override_tp=override_tp,
         override_port=override_port,
         extra_sglang_args=extra_sglang_args,
+        preset_sglang_args=preset_sglang_args,
     )
     nccl_prefix = build_export_prefix(env, _NCCL_ENV_KEYS)
     venv_activate = f"{shell_quote_path_allow_home(merged.venv_path)}/bin/activate"

@@ -14,3 +14,7 @@ pyzmq
 
 # hf_transfer: .env loading (optional)
 python-dotenv
+
+# sglang_runtime/web_ui: local control panel
+fastapi
+uvicorn[standard]

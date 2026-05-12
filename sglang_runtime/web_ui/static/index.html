@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sglang_runtime</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="hdr">
+      <h1>sglang_runtime</h1>
+      <p class="sub">
+        Uses <code>model_presets.json</code> and optional <code>.env</code> next to <code>sglang_runtime.py</code> on the server — tweak flags below, then launch solo or cluster (<code>nnodes</code> = number of
+        hosts; <code>node-rank</code> = order in the list, 0 … n−1).
+      </p>
+    </header>
+
+    <main class="grid">
+      <section class="card span3">
+        <h2>Preset &amp; <code>sglang_args</code></h2>
+        <label>Preset <select id="presetSelect"></select></label>
+        <p class="hint">Toggle rows to drop flags; edit values. Extra argv is appended after the preset merge.</p>
+        <div id="argRows"></div>
+        <div class="btnrow">
+          <button type="button" id="btnAddPair">Add flag + value</button>
+          <button type="button" id="btnAddSwitch">Add switch</button>
+          <button type="button" id="btnReloadRows">Reset from preset</button>
+        </div>
+        <label>Extra argv (<code>shlex</code> split) <input type="text" id="extraSglang" spellcheck="false" /></label>
+      </section>
+
+      <section class="card span2">
+        <h2>Launch</h2>
+        <label>Mode <select id="runMode"><option value="solo">solo</option><option value="cluster">cluster</option></select></label>
+
+        <div id="soloBlock">
+          <label>Solo: SSH host (empty = run on this machine) <input type="text" id="soloHost" placeholder="spark1" spellcheck="false" /></label>
+          <label>Solo log file <input type="text" id="logFile" placeholder="sglang_solo.log" spellcheck="false" /></label>
+        </div>
+
+        <div id="clusterBlock" hidden>
+          <label>Cluster hosts (comma-separated, launch order = rank) <input type="text" id="clusterHosts" placeholder="spark1,spark2" spellcheck="false" /></label>
+          <p class="hint">Each host gets one launch with <code>--nnodes</code> = list length and <code>--node-rank</code> = index (0 for the first host).</p>
+          <label><code>--dist-init-addr</code> <input type="text" id="distAddr" placeholder="spark1:29500" spellcheck="false" /></label>
+          <label>Cluster log directory <input type="text" id="logDir" placeholder="~/runtime-sglang/logs" spellcheck="false" /></label>
+        </div>
+
+        <label class="chk"><input type="checkbox" id="launchVerbose" /> Verbose CLI</label>
+        <div class="btnrow">
+          <button type="button" id="btnPreview">Preview command</button>
+          <button type="button" id="btnLaunch" class="danger">Launch</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Stop / logs</h2>
+        <p class="hint">Same mode and host list as Launch.</p>
+        <div class="btnrow">
+          <button type="button" id="btnStop" class="danger">Stop</button>
+          <button type="button" id="btnLogs">Logs</button>
+        </div>
+        <label>Log lines <input type="number" id="logLines" value="80" min="1" max="5000" /></label>
+      </section>
+
+      <section class="card span2">
+        <h2>Scan</h2>
+        <p class="hint">
+          HTTP probe of the running server. Open <a href="api/health" target="_blank" rel="noopener"><code>api/health</code></a> if routes 404.
+        </p>
+        <label>Server URL <input type="text" id="scanBaseUrl" placeholder="http://spark1:30000" spellcheck="false" /></label>
+        <label>Or SSH host (probe <code>localhost</code> on that box) <input type="text" id="scanSshHost" spellcheck="false" /></label>
+        <details class="adv">
+          <summary>Advanced</summary>
+          <label>Bind host (no URL only) <input type="text" id="scanBindHost" value="127.0.0.1" spellcheck="false" /></label>
+          <label>Port override <input type="number" id="scanPort" placeholder="from preset" /></label>
+          <label class="chk"><input type="checkbox" id="scanReadiness" /> <code>/health_generate</code></label>
+        </details>
+        <div class="btnrow">
+          <button type="button" id="btnScan">Refresh status</button>
+        </div>
+        <div id="scanStatus" class="scan-status" aria-live="polite"></div>
+      </section>
+
+      <section class="card span3">
+        <h2>Output</h2>
+        <pre id="out" class="out"></pre>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

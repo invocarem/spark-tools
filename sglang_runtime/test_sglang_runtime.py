@@ -146,6 +146,48 @@ def test_load_presets() -> None:
     assert presets == {"x": {"model_path": "/m", "tp": 2}}
 
 
+def test_merge_preset_launch_preset_sglang_override() -> None:
+    """preset_sglang_args replaces preset file sglang_args for merged argv."""
+    from sglang_runtime import merge_preset_launch_fields
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".json", mode="w", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(
+            json.dumps(
+                {
+                    "p": {
+                        "model_path": "/models/m",
+                        "venv_path": "/venv/v",
+                        "tp": 2,
+                        "port": 30000,
+                        "sglang_args": ["--trust-remote-code", "--context-length", "99"],
+                    }
+                }
+            )
+        )
+        f.flush()
+        path = f.name
+    try:
+        m = merge_preset_launch_fields(
+            path,
+            "p",
+            {},
+            override_model_path=None,
+            override_venv_path=None,
+            override_tp=None,
+            override_port=None,
+            extra_sglang_args=["--enable-metrics"],
+            preset_sglang_args=["--context-length", "100"],
+        )
+        assert "--trust-remote-code" not in m.sglang_args
+        assert m.sglang_args[:2] == ["--context-length", "100"]
+        assert "--enable-metrics" in m.sglang_args
+        assert "--served-model-name" in m.sglang_args
+    finally:
+        pathlib.Path(path).unlink(missing_ok=True)
+
+
 # ── Helpers ───────────────────────────────────────────────────────
 
 def main() -> int:

@@ -16,6 +16,8 @@ dist/
 
 
 # Python
+.venv/
+**/.venv-webui/
 __pycache__/
 *.py[cod]
 *.pyo
