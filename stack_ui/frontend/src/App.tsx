@@ -27,6 +27,8 @@ type ScanResponse = {
   summary?: ScanSummary | null;
 };
 
+type Runtime = "venv" | "docker";
+
 async function api<T>(
   method: string,
   path: string,
@@ -129,10 +131,13 @@ function ScanSummaryView({ data }: { data: ScanResponse }) {
 }
 
 export default function App() {
+  const [runtime, setRuntime] = useState<Runtime>("venv");
   const [presetNames, setPresetNames] = useState<string[]>([]);
   const [preset, setPreset] = useState("");
   const [rows, setRows] = useState<ArgRow[]>([]);
   const [extraSglang, setExtraSglang] = useState("");
+  const [overrideImage, setOverrideImage] = useState("");
+  const [overrideVenvPath, setOverrideVenvPath] = useState("");
   const [runMode, setRunMode] = useState<"solo" | "cluster">("solo");
   const [soloHost, setSoloHost] = useState("");
   const [logFile, setLogFile] = useState("");
@@ -164,6 +169,7 @@ export default function App() {
 
   const collectPayload = useCallback(() => {
     return {
+      runtime,
       presets_file: "",
       preset,
       env_file: "",
@@ -172,22 +178,33 @@ export default function App() {
       override_tp: null as number | null,
       override_port: null as number | null,
       override_model_path: "",
-      override_venv_path: "",
+      override_venv_path: runtime === "venv" ? (overrideVenvPath || "") : "",
+      override_image: runtime === "docker" ? (overrideImage || "") : "",
     };
-  }, [preset, rows, extraSglang]);
+  }, [runtime, preset, rows, extraSglang, overrideImage, overrideVenvPath]);
 
-  const loadPresetsList = useCallback(async () => {
-    const data = await api<{ names: string[] }>("GET", "/api/presets");
+  const reloadPresets = useCallback(async () => {
+    const data = await api<{ names: string[] }>("GET", `/api/presets?runtime=${runtime}`);
     setPresetNames(data.names);
     setPreset((cur) => (data.names.includes(cur) ? cur : data.names[0] || ""));
-  }, []);
+  }, [runtime]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await reloadPresets();
+      } catch (e) {
+        setOutStyled(String(e), false);
+      }
+    })();
+  }, [reloadPresets, setOutStyled]);
 
   const loadRowsForPreset = useCallback(
     async (name: string) => {
       if (!name) return;
       const data = await api<{ rows: ArgRow[] }>(
         "GET",
-        `/api/preset/${encodeURIComponent(name)}/sglang-rows`,
+        `/api/preset/${encodeURIComponent(name)}/sglang-rows?runtime=${runtime}`,
       );
       setRows(
         data.rows.map((r) => ({
@@ -198,18 +215,8 @@ export default function App() {
         })),
       );
     },
-    [],
+    [runtime],
   );
-
-  useEffect(() => {
-    (async () => {
-      try {
-        await loadPresetsList();
-      } catch (e) {
-        setOutStyled(String(e), false);
-      }
-    })();
-  }, [loadPresetsList, setOutStyled]);
 
   useEffect(() => {
     if (!preset) return;
@@ -234,13 +241,42 @@ export default function App() {
     setRows((prev) => prev.filter((_, j) => j !== i));
   };
 
+  const runtimeLabel = runtime === "docker" ? "sglang_docker" : "sglang_runtime";
+  const presetsPathLabel =
+    runtime === "docker"
+      ? "sglang_docker/model_presets.json"
+      : "sglang_runtime/model_presets.json";
+
   return (
     <>
       <header className="hdr">
-        <h1>Stack UI — sglang_runtime</h1>
+        <h1>Stack UI — {runtimeLabel}</h1>
+        <div className="runtime-switch">
+          <span className="hint">Runtime:</span>{" "}
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="runtime"
+              value="venv"
+              checked={runtime === "venv"}
+              onChange={() => setRuntime("venv")}
+            />{" "}
+            venv (sglang_runtime)
+          </label>
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="runtime"
+              value="docker"
+              checked={runtime === "docker"}
+              onChange={() => setRuntime("docker")}
+            />{" "}
+            docker (sglang_docker)
+          </label>
+        </div>
         <p className="sub">
-          Uses <code>sglang_runtime/model_presets.json</code> and optional{" "}
-          <code>sglang_runtime/.env</code> on the API host — tweak flags below, then launch solo or
+          Uses <code>{presetsPathLabel}</code> and optional{" "}
+          <code>{runtimeLabel}/.env</code> on the API host — tweak flags below, then launch solo or
           cluster (<code>nnodes</code> = number of hosts; <code>node-rank</code> = order in the
           list, 0 … n−1).
         </p>
@@ -374,6 +410,29 @@ export default function App() {
               spellCheck={false}
             />
           </label>
+          {runtime === "venv" ? (
+            <label>
+              Override venv path{" "}
+              <input
+                type="text"
+                value={overrideVenvPath}
+                onChange={(e) => setOverrideVenvPath(e.target.value)}
+                placeholder="~/.sglang"
+                spellCheck={false}
+              />
+            </label>
+          ) : (
+            <label>
+              Override Docker image{" "}
+              <input
+                type="text"
+                value={overrideImage}
+                onChange={(e) => setOverrideImage(e.target.value)}
+                placeholder="scitrera/dgx-spark-sglang:latest"
+                spellCheck={false}
+              />
+            </label>
+          )}
         </section>
 
         <section className="card span2">
@@ -401,16 +460,29 @@ export default function App() {
                   spellCheck={false}
                 />
               </label>
-              <label>
-                Solo log file{" "}
-                <input
-                  type="text"
-                  value={logFile}
-                  onChange={(e) => setLogFile(e.target.value)}
-                  placeholder="sglang_solo.log"
-                  spellCheck={false}
-                />
-              </label>
+              {runtime === "venv" ? (
+                <label>
+                  Solo log file{" "}
+                  <input
+                    type="text"
+                    value={logFile}
+                    onChange={(e) => setLogFile(e.target.value)}
+                    placeholder="sglang_solo.log"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : (
+                <label>
+                  Log directory{" "}
+                  <input
+                    type="text"
+                    value={logDir}
+                    onChange={(e) => setLogDir(e.target.value)}
+                    placeholder="~/sglang-docker-logs"
+                    spellCheck={false}
+                  />
+                </label>
+              )}
             </div>
           ) : (
             <div id="clusterBlock">
@@ -444,7 +516,11 @@ export default function App() {
                   type="text"
                   value={logDir}
                   onChange={(e) => setLogDir(e.target.value)}
-                  placeholder="~/runtime-sglang/logs"
+                  placeholder={
+                    runtime === "docker"
+                      ? "~/sglang-docker-logs"
+                      : "~/runtime-sglang/logs"
+                  }
                   spellCheck={false}
                 />
               </label>
@@ -477,7 +553,7 @@ export default function App() {
               type="button"
               className="danger"
               onClick={async () => {
-                if (!window.confirm("Run launch with the built shell command?")) return;
+                if (!window.confirm(`Run ${runtimeLabel} launch with the built command?`)) return;
                 const hosts = clusterHostList();
                 if (runMode === "cluster" && hosts.length === 0) {
                   setOutStyled('Cluster mode needs at least one host in "Cluster hosts".', false);
@@ -489,7 +565,7 @@ export default function App() {
                   host: soloHost.trim(),
                   hosts,
                   log_dir: logDir.trim() || null,
-                  log_file: logFile.trim() || null,
+                  log_file: runtime === "venv" ? (logFile.trim() || null) : null,
                   dist_addr: distAddr.trim(),
                   verbose: launchVerbose,
                 };
@@ -517,6 +593,7 @@ export default function App() {
               onClick={async () => {
                 const hosts = clusterHostList();
                 const body = {
+                  runtime,
                   mode: runMode,
                   host: soloHost.trim(),
                   hosts,
@@ -539,12 +616,13 @@ export default function App() {
               onClick={async () => {
                 const hosts = clusterHostList();
                 const body = {
+                  runtime,
                   mode: runMode,
                   host: soloHost.trim(),
                   hosts,
                   env_file: "",
                   log_dir: logDir.trim() || null,
-                  log_file: logFile.trim() || null,
+                  log_file: runtime === "venv" ? (logFile.trim() || null) : null,
                   lines: logLines || 80,
                 };
                 try {
@@ -557,6 +635,32 @@ export default function App() {
             >
               Logs
             </button>
+            {runtime === "docker" ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  const body = {
+                    runtime: "docker",
+                    preset,
+                    presets_file: "",
+                    hosts: clusterHostList(),
+                    env_file: "",
+                  };
+                  try {
+                    const data = await api<{ returncode: number }>(
+                      "POST",
+                      "/api/exec",
+                      { runtime: "docker", subcommand: "pull", args: body },
+                    );
+                    setOutStyled(JSON.stringify(data, null, 2), data.returncode === 0);
+                  } catch (e) {
+                    setOutStyled(String(e), false);
+                  }
+                }}
+              >
+                Pull image
+              </button>
+            ) : null}
           </div>
           <label>
             Log lines{" "}
@@ -644,6 +748,7 @@ export default function App() {
                 }
                 const ssh = scanSshHost.trim() || soloHost.trim();
                 const body = {
+                  runtime,
                   presets_file: "",
                   preset,
                   env_file: "",

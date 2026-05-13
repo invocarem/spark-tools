@@ -40,10 +40,26 @@ code {
   font-weight: 600;
 }
 
-.sub {
+.runtime-switch {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+
+.radio-label {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  font-size: 0.88rem !important;
+  color: var(--text) !important;
+}
+
+.radio-label input[type="radio"] {
+  width: auto !important;
   margin: 0;
-  color: var(--muted);
-  font-size: 0.95rem;
+  accent-color: var(--accent);
 }
 
 .grid {

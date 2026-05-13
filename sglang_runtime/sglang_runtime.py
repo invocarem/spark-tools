@@ -20,238 +20,40 @@ import json
 import os
 import shlex
 import subprocess
-from dataclasses import dataclass
-from pathlib import Path
 import sys
-import time
 import urllib.error
 import urllib.request
-from statistics import mean
+from dataclasses import dataclass
+from pathlib import Path
 
-VERBOSE = False
+# Ensure repo root is on sys.path so sglang_common is importable.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-
-def debug_log(message: str) -> None:
-    if VERBOSE:
-        print(f"[verbose] {message}", file=sys.stderr)
-
-
-def format_command(command: list[str]) -> str:
-    return " ".join(shlex.quote(part) for part in command)
-
-
-def run_cmd(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
-    debug_log(f"running command: {format_command(command)}")
-    result = subprocess.run(command, text=True, check=check, capture_output=True)
-    debug_log(f"command exit code: {result.returncode}")
-    if result.stdout.strip():
-        debug_log(f"stdout:\n{result.stdout.strip()}")
-    if result.stderr.strip():
-        debug_log(f"stderr:\n{result.stderr.strip()}")
-    return result
-
-
-def run_shell(command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return run_cmd(["bash", "-lc", command], check=check)
-
-
-def run_remote(host: str, remote_command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    quoted = shlex.quote(remote_command)
-    return run_cmd(["ssh", host, f"bash -lc {quoted}"], check=check)
-
-
-def load_dotenv(path: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            val = val.strip().strip("'").strip('"')
-            if key:
-                values[key] = val
-    return values
-
-
-def load_env_from_args(args: argparse.Namespace) -> dict[str, str]:
-    loaded: dict[str, str] = {}
-    env_file = getattr(args, "env_file", "")
-    if env_file:
-        loaded.update(load_dotenv(env_file))
-        return loaded
-
-    default_env_file = ".env"
-    if os.path.isfile(default_env_file):
-        loaded.update(load_dotenv(default_env_file))
-    return loaded
-
-
-def env_get(env: dict[str, str], key: str, default: str) -> str:
-    return env.get(key, os.environ.get(key, default))
-
-
-def env_lookup(env: dict[str, str], key: str) -> str | None:
-    value = env.get(key, os.environ.get(key))
-    if value is None or value == "":
-        return None
-    return value
-
-
-def load_presets(path: str) -> dict[str, dict[str, object]]:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        raise ValueError("presets file must be a JSON object keyed by preset name")
-    normalized: dict[str, dict[str, object]] = {}
-    for name, config in data.items():
-        if not isinstance(name, str):
-            raise ValueError("preset names must be strings")
-        if not isinstance(config, dict):
-            raise ValueError(f"preset '{name}' must map to an object")
-        normalized[name] = config
-    return normalized
-
-
-def get_preset_string(preset: dict[str, object], key: str) -> str | None:
-    value = preset.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"preset key '{key}' must be a string")
-    return value
-
-
-def get_preset_int(preset: dict[str, object], key: str) -> int | None:
-    value = preset.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise ValueError(f"preset key '{key}' must be an integer")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    raise ValueError(f"preset key '{key}' must be an integer")
-
-
-def get_preset_sglang_args(preset: dict[str, object]) -> list[str]:
-    value = preset.get("sglang_args")
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise ValueError("preset key 'sglang_args' must be a list")
-    args: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            args.append(item)
-            continue
-        if isinstance(item, (dict, list)):
-            # Allow structured JSON payloads for flags like
-            # --model-loader-extra-config.
-            args.append(json.dumps(item, separators=(",", ":")))
-            continue
-        if isinstance(item, (int, float, bool)):
-            args.append(str(item))
-            continue
-        raise ValueError(
-            "preset key 'sglang_args' items must be string/number/bool/object/array"
-        )
-    return args
-
-
-def get_preset_csv_or_list(preset: dict[str, object], key: str) -> str | None:
-    value = preset.get(key)
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        items: list[str] = []
-        for item in value:
-            if not isinstance(item, str):
-                raise ValueError(f"preset key '{key}' list must contain strings only")
-            items.append(item)
-        return ",".join(items)
-    raise ValueError(f"preset key '{key}' must be a string or list of strings")
-
-
-def parse_csv(raw: str) -> list[str]:
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-def normalize_local_sources(items: list[str]) -> list[str]:
-    normalized: list[str] = []
-    for item in items:
-        expanded = os.path.expandvars(os.path.expanduser(item))
-        normalized.append(expanded)
-    return normalized
-
-
-def resolve_value(
-    cli_value: str | int | None,
-    env_value: str | None,
-    preset_value: str | int | None,
-    default_value: str | int,
-) -> str | int:
-    if cli_value is not None:
-        return cli_value
-    if env_value is not None:
-        return env_value
-    if preset_value is not None:
-        return preset_value
-    return default_value
-
-
-def resolve_tp(
-    args_tp: int | None,
-    env: dict[str, str],
-    preset: dict[str, object],
-    preset_name: str,
-) -> int:
-    """Pick tensor-parallel width for **cluster** launch.
-
-    Solo mode ignores preset/env here: see ``launch()`` (solo uses ``tp=1`` unless
-    ``--tp`` is passed). With ``--preset``, the preset's ``tp`` overrides ``TP_SIZE``
-    unless ``--tp`` is passed explicitly.
-    """
-    if args_tp is not None:
-        return int(args_tp)
-    preset_tp = get_preset_int(preset, "tp")
-    env_tp = env_lookup(env, "TP_SIZE")
-    if preset_name.strip():
-        if preset_tp is not None:
-            return int(preset_tp)
-        if env_tp is not None:
-            return int(env_tp)
-        return 1
-    if env_tp is not None:
-        return int(env_tp)
-    if preset_tp is not None:
-        return int(preset_tp)
-    return 1
-
-
-def build_export_prefix(env: dict[str, str], keys: list[str]) -> str:
-    pairs = []
-    for key in keys:
-        if key in env:
-            pairs.append(f"export {key}={shlex.quote(env[key])}")
-    if not pairs:
-        return ""
-    return " && ".join(pairs) + " && "
-
-
-def shell_quote_path_allow_home(path: str) -> str:
-    """Quote shell path while preserving remote HOME expansion for ~/."""
-    if path == "~":
-        return "$HOME"
-    if path.startswith("~/"):
-        return "$HOME/" + shlex.quote(path[2:])
-    return shlex.quote(path)
+from sglang_common import (
+    _NCCL_ENV_KEYS,
+    build_export_prefix,
+    build_remote_scan_script,
+    collect_running_server_scan,
+    env_get,
+    env_lookup,
+    get_preset_csv_or_list,
+    get_preset_int,
+    get_preset_sglang_args,
+    get_preset_string,
+    load_env_from_args,
+    load_presets,
+    normalize_local_sources,
+    parse_csv,
+    resolve_tp,
+    resolve_value,
+    run_benchmark,
+    run_cmd,
+    run_remote,
+    run_shell,
+    shell_quote_path_allow_home,
+)
 
 
 def deploy(args: argparse.Namespace) -> int:
@@ -364,29 +166,6 @@ def run_deploy_command(args: argparse.Namespace) -> dict[str, object]:
         "stdout": buf_out.getvalue().strip(),
         "stderr": buf_err.getvalue().strip(),
     }
-
-
-_NCCL_ENV_KEYS = [
-    "NCCL_IB_DISABLE",
-    "NCCL_IB_GID_INDEX",
-    "NCCL_IB_TIMEOUT",
-    "NCCL_IB_RETRY_CNT",
-    "NCCL_IB_SL",
-    "NCCL_IB_TC",
-    "NCCL_IB_QPS_PER_CONNECTION",
-    "NCCL_IB_CUDA_SUPPORT",
-    "NCCL_NET_GDR_LEVEL",
-    "NCCL_NET_GDR_READ",
-    "NCCL_P2P_DISABLE",
-    "NCCL_IB_HCA",
-    "NCCL_PROTO",
-    "NCCL_ALGO",
-    "NCCL_SOCKET_IFNAME",
-    "NCCL_IB_IFNAME",
-    "NCCL_DEBUG",
-    "CUDA_GRAPHS",
-    "SGLANG_DISABLE_TORCHVISION",
-]
 
 
 def default_model_presets_path() -> str:
@@ -582,7 +361,6 @@ def launch(args: argparse.Namespace) -> int:
         "~/.sglang",
     ))
     if args.mode == "solo":
-        # Solo: single-process local or single-node SSH launch — default to one GPU shard.
         tp = int(args.tp) if args.tp is not None else 1
     else:
         tp = resolve_tp(args.tp, env, preset, preset_name)
@@ -640,7 +418,9 @@ def launch(args: argparse.Namespace) -> int:
             launch_cmd = f"{launch_cmd} {extra_sglang}"
 
     if args.mode == "solo":
-        if VERBOSE:
+        from sglang_common import _cli
+
+        if _cli.VERBOSE:
             print(f"[launch] command: {launch_cmd}")
         if args.host:
             print(f"[launch] remote solo launch on {args.host}")
@@ -655,9 +435,6 @@ def launch(args: argparse.Namespace) -> int:
         if log_file:
             log_path = shell_quote_path_allow_home(log_file)
             print(f"[launch] writing local logs to {log_file}")
-            # Brace group (not subshell): avoids edge cases where `launch_cmd` could
-            # interact badly with `(...)` parsing; trailing `;` required before `}`.
-            # pipefail keeps sglang's exit code through tee.
             solo_cmd = f"set -o pipefail && {{ {launch_cmd}; }} 2>&1 | tee -a {log_path}"
         proc = run_shell(solo_cmd, check=False)
         if proc.stdout:
@@ -682,7 +459,6 @@ def launch(args: argparse.Namespace) -> int:
             f"--nnodes {len(hosts)} --node-rank {idx}"
         )
         print(f"[launch] cluster node {idx} on {host}")
-        # Run the full command in a shell so builtins like `export`/`source` work under nohup.
         node_cmd_quoted = shlex.quote(node_cmd)
         result = run_remote(
             host,
@@ -783,7 +559,6 @@ def _expand_log_path(path: str) -> str:
 
 
 def logs(args: argparse.Namespace) -> int:
-    """Print log tail/head for solo (local/remote) or cluster (per-node files)."""
     env = load_env_from_args(args)
     log_dir = str(
         resolve_value(
@@ -864,154 +639,6 @@ def logs(args: argparse.Namespace) -> int:
     return 0 if result.returncode == 0 else result.returncode
 
 
-def benchmark(args: argparse.Namespace) -> int:
-    result = run_benchmark(
-        base_url=args.base_url,
-        api_key=args.api_key,
-        model=args.model,
-        prompt=args.prompt,
-        max_tokens=args.max_tokens,
-        requests=args.requests,
-        timeout_sec=args.timeout_sec,
-    )
-    if result is None:
-        print("No successful benchmark requests.", file=sys.stderr)
-        return 1
-    print(json.dumps(result, indent=2))
-    return 0
-
-
-def http_get_json(
-    base_url: str,
-    path: str,
-    *,
-    api_key: str,
-    timeout_sec: int,
-) -> dict[str, object]:
-    """GET ``path`` (must start with ``/``) from ``base_url``; return structured result.
-
-    On success, includes ``ok``, ``status``, and ``body`` (parsed JSON when possible).
-    On failure, includes ``ok``, ``error``, and optionally ``status``.
-    """
-    url = base_url.rstrip("/") + path
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    req = urllib.request.Request(url=url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            status = int(getattr(response, "status", 200))
-            body: object
-            try:
-                body = json.loads(raw) if raw.strip() else {}
-            except json.JSONDecodeError:
-                body = raw
-            return {"ok": True, "status": status, "body": body}
-    except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        parsed: object = err_body
-        try:
-            if err_body.strip():
-                parsed = json.loads(err_body)
-        except json.JSONDecodeError:
-            pass
-        return {
-            "ok": False,
-            "status": int(exc.code),
-            "error": exc.reason,
-            "body": parsed,
-        }
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-def collect_running_server_scan(
-    base_url: str,
-    *,
-    api_key: str,
-    timeout_sec: int,
-    readiness: bool,
-) -> dict[str, object]:
-    """Probe SGLang HTTP surface: models list, liveness, optional readiness, server metadata."""
-    out: dict[str, object] = {"base_url": base_url.rstrip("/")}
-    out["v1_models"] = http_get_json(
-        base_url, "/v1/models", api_key=api_key, timeout_sec=timeout_sec
-    )
-    out["health"] = http_get_json(
-        base_url, "/health", api_key=api_key, timeout_sec=timeout_sec
-    )
-    if readiness:
-        out["health_generate"] = http_get_json(
-            base_url, "/health_generate", api_key=api_key, timeout_sec=timeout_sec
-        )
-    out["server_info"] = http_get_json(
-        base_url, "/get_server_info", api_key=api_key, timeout_sec=timeout_sec
-    )
-    si = out["server_info"]
-    if isinstance(si, dict) and not si.get("ok") and "status" in si:
-        out["server_info_alt"] = http_get_json(
-            base_url, "/server_info", api_key=api_key, timeout_sec=timeout_sec
-        )
-    return out
-
-
-def build_remote_scan_script(remote_url: str, api_key: str, timeout_sec: int, readiness: bool) -> str:
-    """Shell snippet: run Python on the SSH target to probe localhost HTTP (same port as bound server)."""
-    template = """python3 - <<'PY'
-import json
-import urllib.error
-import urllib.request
-
-BASE = __BASE__
-API_KEY = __API_KEY__
-TIMEOUT = __TIMEOUT__
-READINESS = __READINESS__
-
-
-def http_get(path):
-    url = BASE.rstrip("/") + path
-    headers = {}
-    if API_KEY:
-        headers["Authorization"] = "Bearer " + API_KEY
-    req = urllib.request.Request(url=url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            status = int(getattr(response, "status", 200))
-            try:
-                body = json.loads(raw) if raw.strip() else {}
-            except json.JSONDecodeError:
-                body = raw
-            return {"ok": True, "status": status, "body": body}
-    except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        try:
-            parsed = json.loads(err_body) if err_body.strip() else err_body
-        except json.JSONDecodeError:
-            parsed = err_body
-        return {"ok": False, "status": int(exc.code), "error": exc.reason, "body": parsed}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-out = {"base_url": BASE.rstrip("/"), "v1_models": http_get("/v1/models"), "health": http_get("/health")}
-if READINESS:
-    out["health_generate"] = http_get("/health_generate")
-out["server_info"] = http_get("/get_server_info")
-si = out["server_info"]
-if not si.get("ok") and "status" in si:
-    out["server_info_alt"] = http_get("/server_info")
-print(json.dumps(out))
-PY"""
-    return (
-        template.replace("__BASE__", json.dumps(remote_url))
-        .replace("__API_KEY__", json.dumps(api_key))
-        .replace("__TIMEOUT__", str(int(timeout_sec)))
-        .replace("__READINESS__", "True" if readiness else "False")
-    )
-
-
 def scan(args: argparse.Namespace) -> int:
     env = load_env_from_args(args)
     presets_file = env_lookup(env, "MODEL_PRESETS_FILE") or args.presets_file
@@ -1074,66 +701,21 @@ def scan(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_benchmark(
-    base_url: str,
-    api_key: str,
-    model: str,
-    prompt: str,
-    max_tokens: int,
-    requests: int,
-    timeout_sec: int,
-) -> dict[str, float | int] | None:
-    url = base_url.rstrip("/") + "/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.0,
-    }
-
-    latencies = []
-    failures = 0
-    for i in range(requests):
-        start = time.perf_counter()
-        req = urllib.request.Request(
-            url=url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as response:
-                response.read()
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-            failures += 1
-            print(f"[benchmark] request {i + 1} failed: {exc}", file=sys.stderr)
-            continue
-        latencies.append(time.perf_counter() - start)
-
-    if not latencies:
+def benchmark(args: argparse.Namespace) -> int:
+    result = run_benchmark(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        model=args.model,
+        prompt=args.prompt,
+        max_tokens=args.max_tokens,
+        requests=args.requests,
+        timeout_sec=args.timeout_sec,
+    )
+    if result is None:
         print("No successful benchmark requests.", file=sys.stderr)
-        return None
-
-    total_time = sum(latencies)
-    rps = len(latencies) / total_time if total_time > 0 else 0.0
-    sorted_lat = sorted(latencies)
-
-    def pct(p: float) -> float:
-        idx = min(len(sorted_lat) - 1, int((p / 100.0) * len(sorted_lat)))
-        return sorted_lat[idx]
-
-    return {
-        "successful_requests": len(latencies),
-        "failed_requests": failures,
-        "avg_latency_sec": round(mean(latencies), 4),
-        "p50_latency_sec": round(pct(50), 4),
-        "p95_latency_sec": round(pct(95), 4),
-        "throughput_rps": round(rps, 3),
-    }
+        return 1
+    print(json.dumps(result, indent=2))
+    return 0
 
 
 def measure(args: argparse.Namespace) -> int:
@@ -1353,10 +935,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    global VERBOSE
+    from sglang_common import _cli
+
     parser = build_parser()
     args = parser.parse_args()
-    VERBOSE = args.verbose
+    _cli.VERBOSE = args.verbose
     return args.func(args)
 
 

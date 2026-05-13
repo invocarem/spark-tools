@@ -8,9 +8,9 @@ Spark-tools is a collection of small, standalone CLI utilities for working with 
 
 ## Tools
 
-### `sglang_runtime/` — SGLang runtime operations
+### `sglang_runtime/` — SGLang runtime operations (venv)
 
-Single-file CLI (`sglang_runtime.py`) for deploying, launching, stopping, and monitoring a custom SGLang stack across nodes via SSH/rsync.
+Single-file CLI (`sglang_runtime.py`) for deploying, launching, stopping, and monitoring a custom SGLang stack across nodes via SSH/rsync. Runs inside a local Python venv.
 
 - **Run**: `python3 sglang_runtime/sglang_runtime.py [--verbose] <subcommand>`
 - **Subcommands**: `deploy`, `launch`, `stop`, `logs`, `scan` (alias: `refresh`), `benchmark`, `measure`
@@ -20,12 +20,28 @@ Single-file CLI (`sglang_runtime.py`) for deploying, launching, stopping, and mo
 - **NCCL env**: Any key in `_NCCL_ENV_KEYS` list is exported before launch when present in the loaded env
 - **Deploy sets**: Named collections of `remote_dir`, `sources`, `exclude` stored in `deploy_sets.json` (optional, at repo root)
 
+### `sglang_docker/` — SGLang runtime via Docker
+
+Parallel CLI (`sglang_docker.py`) that mirrors `sglang_runtime` but runs sglang inside Docker containers instead of a local Python venv. Shares all utility code via `sglang_common/`.
+
+- **Run**: `python3 sglang_docker/sglang_docker.py [--verbose] <subcommand>`
+- **Subcommands**: `pull`, `launch`, `stop`, `logs`, `scan` (alias: `refresh`), `benchmark`, `measure`
+- **Configuration**: same preset resolution pattern; presets file defaults to `sglang_docker/model_presets.json`. Presets use `image` field instead of `venv_path`.
+- **Container naming**: `sglang-{preset_name}` for solo, `sglang-{preset_name}-node{idx}` for cluster
+- **Default log dir**: `~/sglang-docker-logs`
+
+### `sglang_common/` — Shared utilities
+
+Package re-exported by both `sglang_runtime` and `sglang_docker`. Exports CLI helpers, env loading, preset resolution, launch prefix builders, HTTP scan probes, and benchmark logic. Both runtime modules import from here instead of from each other.
+
 ### `stack_ui/` — Stack web console
 
-FastAPI backend plus Vite + React + TypeScript frontend for **sglang_runtime** (presets, preview, launch/stop/logs, scan). Run from repo root; see `stack_ui/README.md`.
+FastAPI backend plus Vite + React + TypeScript frontend supporting **both runtimes** (venv and docker). The UI lets the user switch runtime via radio buttons; each API call body includes a `runtime` field (`"venv"` or `"docker"`, defaults to `"venv"`). See `stack_ui/README.md`.
 
 - **API**: `cd stack_ui/backend && uvicorn stack_ui_server:app --host 127.0.0.1 --port 8765`
 - **Dev UI**: `cd stack_ui/frontend && npm install && npm run dev` (proxies `/api` to port 8765)
+- **Runtime dispatch**: `_RUNTIME_MAP` maps `"venv"` → `sglang_runtime/` and `"docker"` → `sglang_docker/`. The `_run_cli()` helper resolves script path and PYTHONPATH per runtime.
+- **Docker-specific**: `/api/preview-launch` builds a `docker run` command for docker runtime; `/api/exec` allows `"pull"` subcommand only for docker, `"deploy"` only for venv.
 - **Legacy**: `sglang_runtime/web_ui/server.py` re-exports the same `app` for `uvicorn web_ui.server:app` from `sglang_runtime/`
 
 ### `hf_download/` — Hugging Face model download
@@ -47,9 +63,10 @@ Transfers a model directory from rank 0 (sender) to rank 1 (receiver) using PyTo
 
 ## Conventions
 
-- All scripts are self-contained (no `import` between modules in this repo)
+- `sglang_runtime` and `sglang_docker` share code via `sglang_common/` but do not import each other
 - No package manager, no `requirements.txt`, no virtual env setup script — dependencies are installed per-environment
 - Shell scripts use `set -euo pipefail`
 - Python scripts use `raise SystemExit(main())` pattern with `main() -> int`
-- Environment variables use `MODEL_TRANSFER_` prefix in the transfer module, raw names (e.g., `MASTER_NODE`, `NCCL_DEBUG`) in sglang_runtime
+- Environment variables use `MODEL_TRANSFER_` prefix in the transfer module, raw names (e.g., `MASTER_NODE`, `NCCL_DEBUG`) in sglang_runtime, `DOCKER_IMAGE` in sglang_docker
 - `.env` and `.env.stack` files are git-ignored and contain node-specific configuration
+- Stack UI backend request bodies use `runtime: "venv" | "docker"` to dispatch between the two CLI modules
