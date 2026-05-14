@@ -30,8 +30,158 @@ code {
 }
 
 .hdr {
-  padding: 1.25rem 1.5rem;
+  padding: 1.25rem 1.5rem 1rem;
   border-bottom: 1px solid var(--border);
+}
+
+.sub {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  max-width: 56rem;
+}
+
+.tabs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  max-width: 1200px;
+}
+
+.tab-btn {
+  font: inherit;
+  padding: 0.55rem 1rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-main {
+  max-width: 1200px;
+  padding: 1rem 1.5rem 2rem;
+}
+
+.tab-card {
+  margin-bottom: 1rem;
+}
+
+.output-card h2 {
+  margin-bottom: 0.5rem;
+}
+
+.textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0d1117;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 4rem;
+}
+
+.tool-fields {
+  margin-top: 0.75rem;
+}
+
+.tool-row2 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+@media (max-width: 700px) {
+  .tool-row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.log-pane {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.log-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.ok-code {
+  color: var(--ok);
+}
+
+.bad-code {
+  color: var(--danger);
+}
+
+.log-stdout-label,
+.log-stderr-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 0.5rem;
+}
+
+.log-stderr-label {
+  color: var(--danger);
+}
+
+.log-stdout {
+  margin: 0.35rem 0 0;
+  padding: 0.65rem;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.82rem;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: #010409;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.log-stderr-block {
+  margin-bottom: 0.75rem;
+}
+
+.log-stderr {
+  margin: 0.35rem 0 0;
+  padding: 0.65rem;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: rgba(248, 81, 73, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  color: var(--text);
 }
 
 .hdr h1 {

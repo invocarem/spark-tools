@@ -9,6 +9,7 @@ dist/
 **/dist/
 .nimis/
 .monitor/
+.claude/
 
 *.log
 *.swp
@@ -28,6 +29,7 @@ __pycache__/
 sglang
 torch/
 vision/
-
+.venv-stack-ui/
 
 .next/
+
