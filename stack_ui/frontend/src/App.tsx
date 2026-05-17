@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ArgRow = {
   kind: string;
@@ -18,6 +18,12 @@ type ScanSummary = {
   server_info_preview?: string | null;
   v1_models_ok?: boolean | null;
   notes?: string[];
+  benchmark_hints?: {
+    base_url?: string;
+    served_model?: string;
+    hf_model?: string;
+    tokenizer?: string;
+  };
 };
 
 type ScanResponse = {
@@ -27,9 +33,53 @@ type ScanResponse = {
   summary?: ScanSummary | null;
 };
 
-type Runtime = "venv" | "docker";
+const BENCH_FROM_SCAN_STORAGE = "stack_ui_benchmark_from_scan";
 
-type TabId = "configure" | "launch" | "stop" | "logs" | "scan" | "tools";
+type BenchmarkHints = {
+  base_url: string;
+  served_model: string;
+  hf_model: string;
+  tokenizer: string;
+};
+
+function parseBenchmarkHints(raw: unknown): BenchmarkHints | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const s = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const out: BenchmarkHints = {
+    base_url: s(o.base_url),
+    served_model: s(o.served_model),
+    hf_model: s(o.hf_model),
+    tokenizer: s(o.tokenizer),
+  };
+  if (!out.base_url && !out.served_model && !out.hf_model && !out.tokenizer) return null;
+  return out;
+}
+
+function readStoredBenchmarkHints(): BenchmarkHints | null {
+  try {
+    const raw = sessionStorage.getItem(BENCH_FROM_SCAN_STORAGE);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as unknown;
+    return parseBenchmarkHints(o);
+  } catch {
+    return null;
+  }
+}
+
+function persistBenchmarkHints(h: BenchmarkHints) {
+  try {
+    sessionStorage.setItem(BENCH_FROM_SCAN_STORAGE, JSON.stringify(h));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+type Runtime = "venv" | "docker" | "vllm_docker";
+
+type TabId = "configure" | "launch" | "stop" | "logs" | "scan" | "benchmark" | "tools";
+
+type BenchKind = "serving" | "task";
 
 type ToolId = "benchmark" | "measure" | "pull" | "deploy";
 
@@ -136,6 +186,22 @@ function ScanSummaryView({ data }: { data: ScanResponse }) {
           {n}
         </p>
       ))}
+      {(() => {
+        const h = s.benchmark_hints;
+        if (!h) return null;
+        const parts: string[] = [];
+        if (h.base_url) parts.push(`URL → ${h.base_url}`);
+        if (h.served_model) parts.push(`served model → ${h.served_model}`);
+        if (h.hf_model) parts.push(`HF / model path → ${h.hf_model}`);
+        if (h.tokenizer) parts.push(`tokenizer → ${h.tokenizer}`);
+        if (!parts.length) return null;
+        return (
+          <p className="hint">
+            <strong>Benchmark</strong> tab can use: {parts.join("; ")}. Values are applied automatically after
+            this scan (and stored for &quot;Load from last scan&quot; on Benchmark).
+          </p>
+        );
+      })()}
     </>
   );
 }
@@ -146,6 +212,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "stop", label: "Stop" },
   { id: "logs", label: "Logs" },
   { id: "scan", label: "Scan" },
+  { id: "benchmark", label: "Benchmark" },
   { id: "tools", label: "Tools" },
 ];
 
@@ -188,6 +255,26 @@ export default function App() {
   const [measureHostsText, setMeasureHostsText] = useState("");
   const [deploySetName, setDeploySetName] = useState("");
 
+  const [benchKind, setBenchKind] = useState<BenchKind>("serving");
+  const [bsBackend, setBsBackend] = useState("sglang-oai-chat");
+  const [bsDataset, setBsDataset] = useState("random");
+  const [bsNumPrompts, setBsNumPrompts] = useState(10);
+  const [bsRandomIn, setBsRandomIn] = useState(128);
+  const [bsRandomOut, setBsRandomOut] = useState(128);
+  const [bsMaxConcurrency, setBsMaxConcurrency] = useState("2");
+  const [bsServedModel, setBsServedModel] = useState("");
+  const [bsHfModel, setBsHfModel] = useState("");
+  const [bsTokenizer, setBsTokenizer] = useState("");
+  const [bsExtraBody, setBsExtraBody] = useState("");
+  const [bsExtraCli, setBsExtraCli] = useState("");
+  const [bsWallTimeout, setBsWallTimeout] = useState(7200);
+  const [tbInputPath, setTbInputPath] = useState("");
+  const [tbModel, setTbModel] = useState("");
+  const [tbTemperature, setTbTemperature] = useState(0.2);
+  const [tbMaxTokens, setTbMaxTokens] = useState(1024);
+  const [tbRequestTimeout, setTbRequestTimeout] = useState(300);
+  const [tbWallTimeout, setTbWallTimeout] = useState(7200);
+
   /** After Preview, do not overwrite preset from scan until the user changes the preset dropdown. */
   const holdPresetAfterPreviewRef = useRef(false);
   /** Last /v1/models id that matched a preset name (used when reloadPresets would otherwise pick names[0]). */
@@ -214,6 +301,8 @@ export default function App() {
     return one ? [one] : [];
   }, [measureHostsText, runMode, clusterHostList, soloHost]);
 
+  const isDockerRuntime = runtime === "docker" || runtime === "vllm_docker";
+
   const collectPayload = useCallback(() => {
     return {
       runtime,
@@ -226,9 +315,37 @@ export default function App() {
       override_port: null as number | null,
       override_model_path: "",
       override_venv_path: runtime === "venv" ? (overrideVenvPath || "") : "",
-      override_image: runtime === "docker" ? (overrideImage || "") : "",
+      override_image: isDockerRuntime ? (overrideImage || "") : "",
     };
-  }, [runtime, preset, rows, extraSglang, overrideImage, overrideVenvPath]);
+  }, [runtime, preset, rows, extraSglang, overrideImage, overrideVenvPath, isDockerRuntime]);
+
+  /** Same preset / venv overrides as Configure; used by Benchmark tab subprocesses. */
+  const benchmarkPresetPayload = useMemo(
+    () => ({
+      runtime,
+      presets_file: "",
+      preset,
+      env_file: "",
+      override_venv_path: runtime === "venv" ? (overrideVenvPath || "") : "",
+    }),
+    [runtime, preset, overrideVenvPath],
+  );
+
+  const [benchScanHintsAvailable, setBenchScanHintsAvailable] = useState(false);
+
+  useEffect(() => {
+    setBenchScanHintsAvailable(readStoredBenchmarkHints() !== null);
+  }, []);
+
+  const applyBenchmarkHints = useCallback((h: BenchmarkHints) => {
+    if (h.base_url) setScanBaseUrl(h.base_url);
+    if (h.served_model) {
+      setBsServedModel(h.served_model);
+      setTbModel(h.served_model);
+    }
+    if (h.hf_model) setBsHfModel(h.hf_model);
+    if (h.tokenizer) setBsTokenizer(h.tokenizer);
+  }, []);
 
   const runPreviewLaunch = useCallback(async () => {
     try {
@@ -274,6 +391,20 @@ export default function App() {
     })();
   }, [reloadPresets, setOutStyled]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await api<{ benchmark?: { task_benchmark_seed?: string } }>("GET", "/api/defaults");
+        const seed = d.benchmark?.task_benchmark_seed?.trim();
+        if (seed) {
+          setTbInputPath((cur) => (cur.trim() ? cur : seed));
+        }
+      } catch {
+        /* optional path for task bench */
+      }
+    })();
+  }, []);
+
   const loadRowsForPreset = useCallback(
     async (name: string) => {
       if (!name) return;
@@ -305,9 +436,9 @@ export default function App() {
   }, [preset, loadRowsForPreset, setOutStyled]);
 
   useEffect(() => {
-    if (runtime === "docker" && toolId === "deploy") setToolId("benchmark");
+    if (isDockerRuntime && toolId === "deploy") setToolId("benchmark");
     if (runtime === "venv" && toolId === "pull") setToolId("benchmark");
-  }, [runtime, toolId]);
+  }, [runtime, toolId, isDockerRuntime]);
 
   const updateRow = (i: number, patch: Partial<ArgRow>) => {
     setRows((prev) => {
@@ -321,11 +452,14 @@ export default function App() {
     setRows((prev) => prev.filter((_, j) => j !== i));
   };
 
-  const runtimeLabel = runtime === "docker" ? "sglang_docker" : "sglang_runtime";
+  const runtimeLabel =
+    runtime === "docker" ? "sglang_docker" : runtime === "vllm_docker" ? "vllm_docker" : "sglang_runtime";
   const presetsPathLabel =
     runtime === "docker"
       ? "sglang_docker/model_presets.json"
-      : "sglang_runtime/model_presets.json";
+      : runtime === "vllm_docker"
+        ? "vllm_docker/model_presets.json"
+        : "sglang_runtime/model_presets.json";
 
   /** Shared with Scan → Server URL; benchmark uses this (default if empty). */
   const benchmarkBaseUrl = scanBaseUrl.trim() || "http://127.0.0.1:30000";
@@ -342,9 +476,77 @@ export default function App() {
     setOutStyled(JSON.stringify(data, null, 2), ok);
   };
 
+  const runBenchmarkServing = async () => {
+    const maxRaw = bsMaxConcurrency.trim();
+    let max_concurrency: number | null = null;
+    if (maxRaw !== "") {
+      const n = parseInt(maxRaw, 10);
+      if (Number.isNaN(n) || n < 1) {
+        setOutStyled("Max concurrency must be a positive integer or empty (omit cap).", false);
+        return;
+      }
+      max_concurrency = n;
+    }
+    const base = scanBaseUrl.trim() || "http://127.0.0.1:30000";
+    try {
+      const data = await api<{
+        returncode: number;
+        stdout: string;
+        stderr: string;
+        argv: string[];
+        benchmark_python?: string;
+        benchmark_python_meta?: Record<string, string>;
+      }>("POST", "/api/benchmark/serving", {
+        ...benchmarkPresetPayload,
+        base_url: base,
+        backend: bsBackend.trim() || "sglang-oai-chat",
+        dataset_name: bsDataset.trim() || "random",
+        num_prompts: bsNumPrompts,
+        random_input_len: bsRandomIn,
+        random_output_len: bsRandomOut,
+        max_concurrency,
+        model: bsServedModel.trim(),
+        hf_model: bsHfModel.trim(),
+        tokenizer: bsTokenizer.trim(),
+        extra_request_body: bsExtraBody.trim() || null,
+        extra_cli: bsExtraCli.trim(),
+        subprocess_timeout_sec: bsWallTimeout,
+      });
+      setOutStyled(JSON.stringify(data, null, 2), data.returncode === 0);
+    } catch (e) {
+      setOutStyled(String(e), false);
+    }
+  };
+
+  const runBenchmarkTask = async () => {
+    const base = scanBaseUrl.trim() || "http://127.0.0.1:30000";
+    try {
+      const data = await api<{
+        returncode: number;
+        stdout: string;
+        stderr: string;
+        argv: string[];
+        benchmark_python?: string;
+        benchmark_python_meta?: Record<string, string>;
+      }>("POST", "/api/benchmark/task", {
+        ...benchmarkPresetPayload,
+        input_path: tbInputPath.trim(),
+        base_url: base,
+        model: tbModel.trim(),
+        temperature: tbTemperature,
+        max_tokens: tbMaxTokens,
+        request_timeout_sec: tbRequestTimeout,
+        subprocess_timeout_sec: tbWallTimeout,
+      });
+      setOutStyled(JSON.stringify(data, null, 2), data.returncode === 0);
+    } catch (e) {
+      setOutStyled(String(e), false);
+    }
+  };
+
   const runTool = async () => {
-    if (toolId === "pull" && runtime !== "docker") {
-      setOutStyled("Pull image is only available for the docker runtime.", false);
+    if (toolId === "pull" && !isDockerRuntime) {
+      setOutStyled("Pull image is only available for Docker-based runtimes (sglang_docker, vllm_docker).", false);
       return;
     }
     if (toolId === "deploy" && runtime !== "venv") {
@@ -417,7 +619,7 @@ export default function App() {
         <h1>Stack UI</h1>
         <p className="sub">
           <strong>Configure</strong> sets preset, <code>sglang_args</code>, and runtime; the runtime
-          choice applies to Launch, Stop, Logs, Scan, and Tools. Each runtime uses its own{" "}
+          choice applies to Launch, Stop, Logs, Scan, Benchmark, and Tools. Each runtime uses its own{" "}
           <code>model_presets.json</code> and optional <code>.env</code> on the API host.
         </p>
       </header>
@@ -589,7 +791,9 @@ export default function App() {
                   type="text"
                   value={overrideImage}
                   onChange={(e) => setOverrideImage(e.target.value)}
-                  placeholder="scitrera/dgx-spark-sglang:latest"
+                  placeholder={
+                    runtime === "vllm_docker" ? "vllm/vllm-openai:latest" : "scitrera/dgx-spark-sglang:latest"
+                  }
                   spellCheck={false}
                 />
               </label>
@@ -646,7 +850,7 @@ export default function App() {
                       type="text"
                       value={logDir}
                       onChange={(e) => setLogDir(e.target.value)}
-                      placeholder="~/sglang-docker-logs"
+                    placeholder={runtime === "vllm_docker" ? "~/vllm-docker-logs" : "~/sglang-docker-logs"}
                       spellCheck={false}
                     />
                   </label>
@@ -683,7 +887,9 @@ export default function App() {
                     placeholder={
                       runtime === "docker"
                         ? "~/sglang-docker-logs"
-                        : "~/runtime-sglang/logs"
+                        : runtime === "vllm_docker"
+                          ? "~/vllm-docker-logs"
+                          : "~/runtime-sglang/logs"
                     }
                     spellCheck={false}
                   />
@@ -880,7 +1086,7 @@ export default function App() {
               />
             </label>
             <p className="hint">
-              Same value is used for Tools → benchmark base URL (no second copy to maintain).
+              Same value is used for Benchmark and Tools → benchmark base URL (no second copy to maintain).
             </p>
             <label>
               Or SSH host (probe <code>localhost</code> on that box){" "}
@@ -963,6 +1169,12 @@ export default function App() {
                       if (matched && !holdPresetAfterPreviewRef.current) {
                         setPreset(matched);
                       }
+                      const bh = parseBenchmarkHints(data.summary?.benchmark_hints ?? null);
+                      if (bh) {
+                        applyBenchmarkHints(bh);
+                        persistBenchmarkHints(bh);
+                        setBenchScanHintsAvailable(true);
+                      }
                     }
                   } catch (e) {
                     setScanStatus(null);
@@ -981,13 +1193,276 @@ export default function App() {
           </section>
         ) : null}
 
+        {tab === "benchmark" ? (
+          <section className="card tab-card">
+            <h2>Benchmark</h2>
+            <p className="hint">
+              Runs scripts from <code>benchmark/</code> on this API host (not over SSH).{" "}
+              <strong>Serving</strong> wraps <code>sglang.bench_serving</code> for throughput / latency.{" "}
+              <strong>Task</strong> runs <code>task_benchmark.py</code> on a JSONL suite for pass-rate style checks.
+              With runtime <strong>venv</strong> and a Configure preset selected, the subprocess uses that preset&apos;s{" "}
+              <code>venv_path</code> (same merge as Launch, including optional override venv path). With{" "}
+              <strong>docker</strong> or <strong>vllm_docker</strong> runtime or no preset, the Stack UI server&apos;s
+              Python runs the scripts.
+            </p>
+            <label>
+              Server URL (same as Scan){" "}
+              <input
+                type="text"
+                value={scanBaseUrl}
+                onChange={(e) => setScanBaseUrl(e.target.value)}
+                placeholder="http://100.109.56.33:30000"
+                spellCheck={false}
+              />
+            </label>
+            <div className="btnrow">
+              <button
+                type="button"
+                disabled={!benchScanHintsAvailable}
+                onClick={() => {
+                  const h = readStoredBenchmarkHints();
+                  if (h) {
+                    applyBenchmarkHints(h);
+                    setOutStyled("Loaded benchmark fields from last scan.", true);
+                  }
+                }}
+              >
+                Load from last scan
+              </button>
+              {!benchScanHintsAvailable ? (
+                <span className="hint">Run Scan once to capture URL, model id, tokenizer, and HF path.</span>
+              ) : null}
+            </div>
+            <div className="runtime-switch bench-kind">
+              <span className="hint">Mode:</span>{" "}
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="benchKind"
+                  value="serving"
+                  checked={benchKind === "serving"}
+                  onChange={() => setBenchKind("serving")}
+                />{" "}
+                Serving / load (<code>benchmark_sglang.py</code>)
+              </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="benchKind"
+                  value="task"
+                  checked={benchKind === "task"}
+                  onChange={() => setBenchKind("task")}
+                />{" "}
+                Task / quality (<code>task_benchmark.py</code>)
+              </label>
+            </div>
+
+            {benchKind === "serving" ? (
+              <div className="tool-fields">
+                <label>
+                  Backend{" "}
+                  <input
+                    type="text"
+                    value={bsBackend}
+                    onChange={(e) => setBsBackend(e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Dataset name{" "}
+                  <input
+                    type="text"
+                    value={bsDataset}
+                    onChange={(e) => setBsDataset(e.target.value)}
+                    placeholder="random"
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="tool-row2">
+                  <label>
+                    Num prompts{" "}
+                    <input
+                      type="number"
+                      value={bsNumPrompts}
+                      onChange={(e) => setBsNumPrompts(parseInt(e.target.value, 10) || 1)}
+                      min={1}
+                    />
+                  </label>
+                  <label>
+                    Max concurrency{" "}
+                    <input
+                      type="text"
+                      value={bsMaxConcurrency}
+                      onChange={(e) => setBsMaxConcurrency(e.target.value)}
+                      placeholder="empty = no cap"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+                <div className="tool-row2">
+                  <label>
+                    Random input len{" "}
+                    <input
+                      type="number"
+                      value={bsRandomIn}
+                      onChange={(e) => setBsRandomIn(parseInt(e.target.value, 10) || 1)}
+                      min={1}
+                    />
+                  </label>
+                  <label>
+                    Random output len{" "}
+                    <input
+                      type="number"
+                      value={bsRandomOut}
+                      onChange={(e) => setBsRandomOut(parseInt(e.target.value, 10) || 1)}
+                      min={1}
+                    />
+                  </label>
+                </div>
+                <label>
+                  Served model id (<code>--model</code>, optional if <code>/v1/models</code> works){" "}
+                  <input
+                    type="text"
+                    value={bsServedModel}
+                    onChange={(e) => setBsServedModel(e.target.value)}
+                    placeholder={preset ? `e.g. ${preset}` : "qwen3.6-27b"}
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  HF model for bench tokenizer (<code>--hf-model</code>){" "}
+                  <input
+                    type="text"
+                    value={bsHfModel}
+                    onChange={(e) => setBsHfModel(e.target.value)}
+                    placeholder="Qwen/Qwen3.5-397B-A17B-GPTQ-Int4"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Tokenizer path or HF id (<code>--tokenizer</code>){" "}
+                  <input
+                    type="text"
+                    value={bsTokenizer}
+                    onChange={(e) => setBsTokenizer(e.target.value)}
+                    placeholder="/home/you/huggingface/Qwen_…"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Extra request body (JSON, optional){" "}
+                  <textarea
+                    className="textarea"
+                    rows={2}
+                    value={bsExtraBody}
+                    onChange={(e) => setBsExtraBody(e.target.value)}
+                    placeholder='{"temperature": 0}'
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Extra CLI (optional, <code>shlex</code> split — e.g. <code>--request-rate 2</code>){" "}
+                  <input
+                    type="text"
+                    value={bsExtraCli}
+                    onChange={(e) => setBsExtraCli(e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Subprocess wall timeout (s){" "}
+                  <input
+                    type="number"
+                    value={bsWallTimeout}
+                    onChange={(e) => setBsWallTimeout(parseInt(e.target.value, 10) || 7200)}
+                    min={30}
+                  />
+                </label>
+                <div className="btnrow">
+                  <button type="button" onClick={() => void runBenchmarkServing()}>
+                    Run serving benchmark
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="tool-fields">
+                <label>
+                  Input JSONL path (on API host; empty = script default seed){" "}
+                  <input
+                    type="text"
+                    value={tbInputPath}
+                    onChange={(e) => setTbInputPath(e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Served model id (optional; uses <code>/v1/models</code> when empty){" "}
+                  <input
+                    type="text"
+                    value={tbModel}
+                    onChange={(e) => setTbModel(e.target.value)}
+                    placeholder={preset ? `e.g. ${preset}` : "qwen3.6-27b"}
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="tool-row2">
+                  <label>
+                    Temperature{" "}
+                    <input
+                      type="number"
+                      step="any"
+                      value={tbTemperature}
+                      onChange={(e) => setTbTemperature(parseFloat(e.target.value) || 0)}
+                    />
+                  </label>
+                  <label>
+                    Max tokens{" "}
+                    <input
+                      type="number"
+                      value={tbMaxTokens}
+                      onChange={(e) => setTbMaxTokens(parseInt(e.target.value, 10) || 1)}
+                      min={1}
+                    />
+                  </label>
+                </div>
+                <div className="tool-row2">
+                  <label>
+                    Per-request timeout (s){" "}
+                    <input
+                      type="number"
+                      step="any"
+                      value={tbRequestTimeout}
+                      onChange={(e) => setTbRequestTimeout(parseFloat(e.target.value) || 1)}
+                      min={1}
+                    />
+                  </label>
+                  <label>
+                    Subprocess wall timeout (s){" "}
+                    <input
+                      type="number"
+                      value={tbWallTimeout}
+                      onChange={(e) => setTbWallTimeout(parseInt(e.target.value, 10) || 7200)}
+                      min={30}
+                    />
+                  </label>
+                </div>
+                <div className="btnrow">
+                  <button type="button" onClick={() => void runBenchmarkTask()}>
+                    Run task benchmark
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        ) : null}
+
         {tab === "tools" ? (
           <section className="card tab-card">
             <h2>Tools</h2>
             <p className="hint">
               Runs allowed <code>{runtimeLabel}</code> subcommands via the API (<code>benchmark</code>,{" "}
               <code>measure</code>
-              {runtime === "docker" ? ", pull" : ", deploy"}). Full CLI output is in Output below.
+              {isDockerRuntime ? ", pull" : ", deploy"}). Full CLI output is in Output below.
             </p>
             <label>
               Tool{" "}
@@ -997,7 +1472,7 @@ export default function App() {
               >
                 <option value="benchmark">benchmark — API latency / throughput</option>
                 <option value="measure">measure — GPU / load snapshots</option>
-                {runtime === "docker" ? <option value="pull">pull — Docker image on hosts</option> : null}
+                {isDockerRuntime ? <option value="pull">pull — Docker image on hosts</option> : null}
                 {runtime === "venv" ? <option value="deploy">deploy — rsync runtime to hosts</option> : null}
               </select>
             </label>
@@ -1092,7 +1567,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {toolId === "pull" && runtime === "docker" ? (
+            {toolId === "pull" && isDockerRuntime ? (
               <div className="tool-fields">
                 <p className="hint">
                   Uses the <strong>{preset || "(no preset)"}</strong> preset for the image when{" "}
@@ -1154,10 +1629,20 @@ export default function App() {
                 />{" "}
                 docker (sglang_docker)
               </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="runtime"
+                  value="vllm_docker"
+                  checked={runtime === "vllm_docker"}
+                  onChange={() => setRuntime("vllm_docker")}
+                />{" "}
+                vllm_docker
+              </label>
             </div>
             <p className="hint">
               Active presets file: <code>{presetsPathLabel}</code>. Optional env:{" "}
-              <code>{runtimeLabel}/.env</code>. Used by Launch, Stop, Logs, Scan, and Tools.
+              <code>{runtimeLabel}/.env</code>. Used by Launch, Stop, Logs, Scan, Benchmark, and Tools.
             </p>
           </section>
         ) : null}

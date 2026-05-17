@@ -1,0 +1,27 @@
+{
+  "deepseek-v4-flash": {
+    "image": "vllm-node:latest",
+    "model_path": "~/huggingface/RedHatAI_DeepSeek-V4-Flash-NVFP4-FP8",
+    "tp": 2,
+    "port": 30000,
+    "venv_path": "~/runtime-sglang/.sglang",
+    "sglang_args": [
+      "--trust-remote-code",
+      "--enable-metrics",
+      "--context-length", "131072",
+      "--mem-fraction-static", "0.90",
+      "--kv-cache-dtype", "fp8_e4m3"
+    ]
+  },
+  "qwen3.5-2b": {
+    "image": "vllm-node:latest",
+    "model_path": "~/huggingface/Qwen_Qwen3.5-2B",
+    "tp": 2,
+    "port": 30000,
+    "sglang_args": [
+      "--trust-remote-code",
+      "--max-model-len",
+      "32768"
+    ]
+  }
+}

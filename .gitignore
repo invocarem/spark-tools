@@ -16,6 +16,8 @@ dist/
 *.backup
 
 
+sglang-oai-chat*.jsonl
+
 # Python
 .venv/
 **/.venv-webui/

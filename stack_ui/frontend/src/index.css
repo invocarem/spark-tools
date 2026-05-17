@@ -197,6 +197,11 @@ code {
   margin: 0.5rem 0;
 }
 
+.runtime-switch.bench-kind {
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+
 .radio-label {
   display: inline-flex !important;
   align-items: center;

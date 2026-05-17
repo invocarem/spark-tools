@@ -30,18 +30,28 @@ Parallel CLI (`sglang_docker.py`) that mirrors `sglang_runtime` but runs sglang 
 - **Container naming**: `sglang-{preset_name}` for solo, `sglang-{preset_name}-node{idx}` for cluster
 - **Default log dir**: `~/sglang-docker-logs`
 
+### `vllm_docker/` — vLLM runtime via Docker
+
+Parallel CLI (`vllm_docker.py`) modeled on `sglang_docker` but launches **`vllm serve`** inside the container. Shares helpers via `sglang_common/` (presets, env, scan, benchmark).
+
+- **Run**: `python3 vllm_docker/vllm_docker.py [--verbose] <subcommand>`
+- **Subcommands**: `pull`, `launch`, `stop`, `logs`, `scan` (alias: `refresh`), `benchmark`, `measure`
+- **Configuration**: presets default to `vllm_docker/model_presets.json` (same JSON keys as sglang docker: `image`, `model_path`, `tp`, `port`, `sglang_args` for extra `vllm serve` flags). Env `VLLM_EXTRA_ARGS` and CLI `--vllm-args` append after preset rows.
+- **Container naming**: `vllm-{preset_name}` for solo, `vllm-{preset_name}-node{idx}` for cluster (with preset); `vllm-node{idx}` when no preset
+- **Default log dir**: `~/vllm-docker-logs`
+
 ### `sglang_common/` — Shared utilities
 
-Package re-exported by both `sglang_runtime` and `sglang_docker`. Exports CLI helpers, env loading, preset resolution, launch prefix builders, HTTP scan probes, and benchmark logic. Both runtime modules import from here instead of from each other.
+Package re-exported by `sglang_runtime`, `sglang_docker`, and `vllm_docker`. Exports CLI helpers, env loading, preset resolution, launch prefix builders, HTTP scan probes, and benchmark logic. Runtime modules import from here instead of from each other.
 
 ### `stack_ui/` — Stack web console
 
-FastAPI backend plus Vite + React + TypeScript frontend supporting **both runtimes** (venv and docker). The UI lets the user switch runtime via radio buttons; each API call body includes a `runtime` field (`"venv"` or `"docker"`, defaults to `"venv"`). See `stack_ui/README.md`.
+FastAPI backend plus Vite + React + TypeScript frontend supporting **venv**, **docker**, and **vllm_docker**. The UI lets the user switch runtime via radio buttons; each API call body includes a `runtime` field (`"venv"`, `"docker"`, or `"vllm_docker"`, defaults to `"venv"`). See `stack_ui/README.md`.
 
 - **API**: `cd stack_ui/backend && uvicorn stack_ui_server:app --host 127.0.0.1 --port 8765`
 - **Dev UI**: `cd stack_ui/frontend && npm install && npm run dev` (proxies `/api` to port 8765)
-- **Runtime dispatch**: `_RUNTIME_MAP` maps `"venv"` → `sglang_runtime/` and `"docker"` → `sglang_docker/`. The `_run_cli()` helper resolves script path and PYTHONPATH per runtime.
-- **Docker-specific**: `/api/preview-launch` builds a `docker run` command for docker runtime; `/api/exec` allows `"pull"` subcommand only for docker, `"deploy"` only for venv.
+- **Runtime dispatch**: `_RUNTIME_MAP` maps `"venv"` → `sglang_runtime/`, `"docker"` → `sglang_docker/`, `"vllm_docker"` → `vllm_docker/`. The `_run_cli()` helper resolves script path and PYTHONPATH per runtime.
+- **Docker-style runtimes**: `/api/preview-launch` builds a `docker run` command for `docker` and `vllm_docker`; `/api/exec` allows `"pull"` for those runtimes, `"deploy"` only for venv.
 - **Legacy**: `sglang_runtime/web_ui/server.py` re-exports the same `app` for `uvicorn web_ui.server:app` from `sglang_runtime/`
 
 ### `hf_download/` — Hugging Face model download

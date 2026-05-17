@@ -1,6 +1,6 @@
 # Stack UI
 
-Web console for **sglang_runtime** and **sglang_docker** (presets, launch/stop/logs, scan). Switch between runtimes with the radio buttons in the header.
+Web console for **sglang_runtime**, **sglang_docker**, and **vllm_docker** (presets, launch/stop/logs, scan). Switch runtimes with the radio buttons on the Configure tab.
 
 ## Layout
 
@@ -24,6 +24,7 @@ Or reuse an existing env that already has FastAPI.
 Presets and `.env` are resolved per runtime:
 - **venv** → `sglang_runtime/model_presets.json` and `sglang_runtime/.env`
 - **docker** → `sglang_docker/model_presets.json` and `sglang_docker/.env`
+- **vllm_docker** → `vllm_docker/model_presets.json` and `vllm_docker/.env`
 
 Optional: comma-separated CORS origins (default includes Vite dev ports):
 
@@ -33,25 +34,26 @@ export STACK_UI_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:3000
 
 ### API
 
-Every endpoint accepts a `runtime` field (`"venv"` or `"docker"`, defaults to `"venv"`). GET endpoints also accept `?runtime=` as a query parameter.
+Every endpoint accepts a `runtime` field (`"venv"`, `"docker"`, or `"vllm_docker"`; defaults to `"venv"`). GET endpoints also accept `?runtime=` as a query parameter.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/defaults` | Returns paths for both runtimes, available subcommands |
+| GET | `/api/defaults` | Returns paths for each runtime, available subcommands |
 | GET | `/api/presets?runtime=` | Load presets for the given runtime |
 | GET | `/api/preset/{name}/sglang-rows?runtime=` | Parse `sglang_args` rows for a preset |
-| POST | `/api/preview-launch` | Build launch command (venv: source+activate; docker: `docker run`) |
+| POST | `/api/preview-launch` | Build launch command (venv: source+activate; docker / vllm_docker: `docker run`) |
 | POST | `/api/launch` | Execute launch via the selected runtime CLI |
 | POST | `/api/stop` | Stop via the selected runtime CLI |
 | POST | `/api/logs` | Fetch logs via the selected runtime CLI |
 | POST | `/api/scan`, `/api/refresh` | Probe running server |
-| POST | `/api/exec` | Run any allowed subcommand (`deploy` for venv, `pull` for docker) |
+| POST | `/api/exec` | Run any allowed subcommand (`deploy` for venv; `pull` for docker and vllm_docker) |
 | GET | `/api/health` | Health check |
 
 ### Runtime-specific behaviour
 
 - **venv**: supports `deploy`, uses `venv_path`, `log_file` for solo mode
 - **docker**: supports `pull`, uses `image`, `log_dir` for container log mounts; no `deploy` subcommand
+- **vllm_docker**: same subcommand set as docker (`pull`, `launch`, …); runs `vllm serve` in the container; default log dir `~/vllm-docker-logs`; extra CLI from preset `sglang_args`, env `VLLM_EXTRA_ARGS`, and `--vllm-args`
 
 ## Frontend (development)
 

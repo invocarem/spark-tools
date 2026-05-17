@@ -33,8 +33,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-_TOOLS_ROOT = Path(__file__).resolve().parent.parent
-_BENCHMARK_SGLANG = _TOOLS_ROOT / "benchmark_sglang.py"
+_BENCHMARK_DIR = Path(__file__).resolve().parent
+_BENCHMARK_SGLANG = _BENCHMARK_DIR / "benchmark_sglang.py"
 
 PRESET_ENV = {
     "qwen3_397b_gptq": {
