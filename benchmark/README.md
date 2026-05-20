@@ -114,7 +114,7 @@ CLI flags override env vars. Unknown arguments are passed through to the underly
 
 ## Stack UI
 
-The Stack UI **Serving** benchmark tab calls `benchmark/benchmark_sglang.py` via `POST /api/benchmark/serving` (venv runtime can use the preset’s `venv_path` for Python). Task benchmarks use `task_benchmark.py` via `POST /api/benchmark/task`.
+The Stack UI **Benchmark** tab calls `benchmark/benchmark_sglang.py` via `POST /api/benchmark/serving`, `benchmark/benchmark_vllm.py` via `POST /api/benchmark/vllm-serving`, and `task_benchmark.py` via `POST /api/benchmark/task` (venv runtime can use the preset’s `venv_path` for Python on serving/task subprocesses).
 
 ## Sample result files
 

@@ -79,7 +79,7 @@ type Runtime = "venv" | "docker" | "vllm_docker";
 
 type TabId = "configure" | "launch" | "stop" | "logs" | "scan" | "benchmark" | "tools";
 
-type BenchKind = "serving" | "task";
+type BenchKind = "sglang_serving" | "vllm_serving" | "task";
 
 type ToolId = "benchmark" | "measure" | "pull" | "deploy";
 
@@ -255,7 +255,7 @@ export default function App() {
   const [measureHostsText, setMeasureHostsText] = useState("");
   const [deploySetName, setDeploySetName] = useState("");
 
-  const [benchKind, setBenchKind] = useState<BenchKind>("serving");
+  const [benchKind, setBenchKind] = useState<BenchKind>("sglang_serving");
   const [bsBackend, setBsBackend] = useState("sglang-oai-chat");
   const [bsDataset, setBsDataset] = useState("random");
   const [bsNumPrompts, setBsNumPrompts] = useState(10);
@@ -336,6 +336,23 @@ export default function App() {
   useEffect(() => {
     setBenchScanHintsAvailable(readStoredBenchmarkHints() !== null);
   }, []);
+
+  /** SGLang and vLLM serving share one Backend field; swap defaults when switching mode. */
+  useEffect(() => {
+    if (benchKind === "vllm_serving") {
+      setBsBackend((cur) => {
+        const t = cur.trim();
+        if (!t || t === "sglang-oai-chat") return "openai-chat";
+        return cur;
+      });
+    } else if (benchKind === "sglang_serving") {
+      setBsBackend((cur) => {
+        const t = cur.trim();
+        if (!t || t === "openai-chat") return "sglang-oai-chat";
+        return cur;
+      });
+    }
+  }, [benchKind]);
 
   const applyBenchmarkHints = useCallback((h: BenchmarkHints) => {
     if (h.base_url) setScanBaseUrl(h.base_url);
@@ -476,19 +493,58 @@ export default function App() {
     setOutStyled(JSON.stringify(data, null, 2), ok);
   };
 
-  const runBenchmarkServing = async () => {
+  const servingBenchmarkPayload = useCallback(() => {
     const maxRaw = bsMaxConcurrency.trim();
     let max_concurrency: number | null = null;
     if (maxRaw !== "") {
       const n = parseInt(maxRaw, 10);
       if (Number.isNaN(n) || n < 1) {
-        setOutStyled("Max concurrency must be a positive integer or empty (omit cap).", false);
-        return;
+        throw new Error("Max concurrency must be a positive integer or empty (omit cap).");
       }
       max_concurrency = n;
     }
-    const base = scanBaseUrl.trim() || "http://127.0.0.1:30000";
+    const base =
+      scanBaseUrl.trim() ||
+      (benchKind === "vllm_serving" ? "http://127.0.0.1:8000" : "http://127.0.0.1:30000");
+    return {
+      ...benchmarkPresetPayload,
+      base_url: base,
+      backend:
+        bsBackend.trim() ||
+        (benchKind === "vllm_serving" ? "openai-chat" : "sglang-oai-chat"),
+      dataset_name: bsDataset.trim() || "random",
+      num_prompts: bsNumPrompts,
+      random_input_len: bsRandomIn,
+      random_output_len: bsRandomOut,
+      max_concurrency,
+      model: bsServedModel.trim(),
+      hf_model: bsHfModel.trim(),
+      tokenizer: bsTokenizer.trim(),
+      extra_request_body: bsExtraBody.trim() || null,
+      extra_cli: bsExtraCli.trim(),
+      subprocess_timeout_sec: bsWallTimeout,
+    };
+  }, [
+    benchKind,
+    benchmarkPresetPayload,
+    bsBackend,
+    bsDataset,
+    bsExtraBody,
+    bsExtraCli,
+    bsHfModel,
+    bsMaxConcurrency,
+    bsNumPrompts,
+    bsRandomIn,
+    bsRandomOut,
+    bsServedModel,
+    bsTokenizer,
+    bsWallTimeout,
+    scanBaseUrl,
+  ]);
+
+  const runBenchmarkServing = async () => {
     try {
+      const payload = servingBenchmarkPayload();
       const data = await api<{
         returncode: number;
         stdout: string;
@@ -496,22 +552,24 @@ export default function App() {
         argv: string[];
         benchmark_python?: string;
         benchmark_python_meta?: Record<string, string>;
-      }>("POST", "/api/benchmark/serving", {
-        ...benchmarkPresetPayload,
-        base_url: base,
-        backend: bsBackend.trim() || "sglang-oai-chat",
-        dataset_name: bsDataset.trim() || "random",
-        num_prompts: bsNumPrompts,
-        random_input_len: bsRandomIn,
-        random_output_len: bsRandomOut,
-        max_concurrency,
-        model: bsServedModel.trim(),
-        hf_model: bsHfModel.trim(),
-        tokenizer: bsTokenizer.trim(),
-        extra_request_body: bsExtraBody.trim() || null,
-        extra_cli: bsExtraCli.trim(),
-        subprocess_timeout_sec: bsWallTimeout,
-      });
+      }>("POST", "/api/benchmark/serving", payload);
+      setOutStyled(JSON.stringify(data, null, 2), data.returncode === 0);
+    } catch (e) {
+      setOutStyled(String(e), false);
+    }
+  };
+
+  const runBenchmarkVllmServing = async () => {
+    try {
+      const payload = servingBenchmarkPayload();
+      const data = await api<{
+        returncode: number;
+        stdout: string;
+        stderr: string;
+        argv: string[];
+        benchmark_python?: string;
+        benchmark_python_meta?: Record<string, string>;
+      }>("POST", "/api/benchmark/vllm-serving", payload);
       setOutStyled(JSON.stringify(data, null, 2), data.returncode === 0);
     } catch (e) {
       setOutStyled(String(e), false);
@@ -1198,8 +1256,10 @@ export default function App() {
             <h2>Benchmark</h2>
             <p className="hint">
               Runs scripts from <code>benchmark/</code> on this API host (not over SSH).{" "}
-              <strong>Serving</strong> wraps <code>sglang.bench_serving</code> for throughput / latency.{" "}
-              <strong>Task</strong> runs <code>task_benchmark.py</code> on a JSONL suite for pass-rate style checks.
+              <strong>SGLang serving</strong> wraps <code>sglang.bench_serving</code>;{" "}
+              <strong>vLLM serving</strong> wraps <code>vllm bench serve</code> (needs vLLM in the benchmark
+              Python env). <strong>Task</strong> runs <code>task_benchmark.py</code> on a JSONL suite for
+              pass-rate style checks.
               With runtime <strong>venv</strong> and a Configure preset selected, the subprocess uses that preset&apos;s{" "}
               <code>venv_path</code> (same merge as Launch, including optional override venv path). With{" "}
               <strong>docker</strong> or <strong>vllm_docker</strong> runtime or no preset, the Stack UI server&apos;s
@@ -1239,11 +1299,21 @@ export default function App() {
                 <input
                   type="radio"
                   name="benchKind"
-                  value="serving"
-                  checked={benchKind === "serving"}
-                  onChange={() => setBenchKind("serving")}
+                  value="sglang_serving"
+                  checked={benchKind === "sglang_serving"}
+                  onChange={() => setBenchKind("sglang_serving")}
                 />{" "}
-                Serving / load (<code>benchmark_sglang.py</code>)
+                SGLang serving (<code>benchmark_sglang.py</code>)
+              </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="benchKind"
+                  value="vllm_serving"
+                  checked={benchKind === "vllm_serving"}
+                  onChange={() => setBenchKind("vllm_serving")}
+                />{" "}
+                vLLM serving (<code>benchmark_vllm.py</code>)
               </label>
               <label className="radio-label">
                 <input
@@ -1257,7 +1327,7 @@ export default function App() {
               </label>
             </div>
 
-            {benchKind === "serving" ? (
+            {benchKind === "sglang_serving" || benchKind === "vllm_serving" ? (
               <div className="tool-fields">
                 <label>
                   Backend{" "}
@@ -1265,6 +1335,9 @@ export default function App() {
                     type="text"
                     value={bsBackend}
                     onChange={(e) => setBsBackend(e.target.value)}
+                    placeholder={
+                      benchKind === "vllm_serving" ? "openai-chat" : "sglang-oai-chat"
+                    }
                     spellCheck={false}
                   />
                 </label>
@@ -1379,8 +1452,17 @@ export default function App() {
                   />
                 </label>
                 <div className="btnrow">
-                  <button type="button" onClick={() => void runBenchmarkServing()}>
-                    Run serving benchmark
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void (benchKind === "vllm_serving"
+                        ? runBenchmarkVllmServing()
+                        : runBenchmarkServing())
+                    }
+                  >
+                    {benchKind === "vllm_serving"
+                      ? "Run vLLM serving benchmark"
+                      : "Run SGLang serving benchmark"}
                   </button>
                 </div>
               </div>

@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BENCHMARK_DIR = _REPO_ROOT / "benchmark"
 _BENCH_SGLANG_SCRIPT = _BENCHMARK_DIR / "benchmark_sglang.py"
+_BENCH_VLLM_SCRIPT = _BENCHMARK_DIR / "benchmark_vllm.py"
 _TASK_BENCH_SCRIPT = _BENCHMARK_DIR / "task_benchmark.py"
 _TASK_BENCH_SEED = _BENCHMARK_DIR / "task_benchmark_seed.jsonl"
 
@@ -306,6 +307,13 @@ class BenchmarkServingRequest(BaseModel):
         description="Additional argv appended after flags (split with shlex, like a shell line).",
     )
     subprocess_timeout_sec: float = Field(default=7200.0, ge=30.0)
+
+
+class BenchmarkVllmServingRequest(BenchmarkServingRequest):
+    """Maps to ``benchmark/benchmark_vllm.py`` (``vllm bench serve`` throughput / latency)."""
+
+    base_url: str = Field(default="http://127.0.0.1:8000")
+    backend: str = Field(default="openai-chat")
 
 
 class BenchmarkTaskRequest(BaseModel):
@@ -597,6 +605,9 @@ def api_defaults() -> dict[str, object]:
             "dir": str(_BENCHMARK_DIR.resolve()),
             "benchmark_sglang": str(_BENCH_SGLANG_SCRIPT.resolve())
             if _BENCH_SGLANG_SCRIPT.is_file()
+            else "",
+            "benchmark_vllm": str(_BENCH_VLLM_SCRIPT.resolve())
+            if _BENCH_VLLM_SCRIPT.is_file()
             else "",
             "task_benchmark": str(_TASK_BENCH_SCRIPT.resolve())
             if _TASK_BENCH_SCRIPT.is_file()
@@ -1188,15 +1199,7 @@ def api_health() -> dict[str, object]:
     return {"ok": True, "service": "stack_ui"}
 
 
-@app.post("/api/benchmark/serving")
-def api_benchmark_serving(body: BenchmarkServingRequest) -> dict[str, object]:
-    py_exe, py_meta = _resolve_benchmark_python_executable(
-        runtime=body.runtime,
-        presets_file=body.presets_file,
-        env_file=body.env_file,
-        preset=body.preset,
-        override_venv_path=body.override_venv_path,
-    )
+def _serving_benchmark_argv(body: BenchmarkServingRequest) -> list[str]:
     argv: list[str] = [
         "--base-url",
         body.base_url.strip(),
@@ -1235,10 +1238,26 @@ def api_benchmark_serving(body: BenchmarkServingRequest) -> dict[str, object]:
             argv.extend(shlex.split(xcli))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"extra_cli: {exc}") from exc
-    full_argv = [py_exe, str(_BENCH_SGLANG_SCRIPT), *argv]
+    return argv
+
+
+def _run_serving_benchmark(
+    script: Path,
+    script_label: str,
+    body: BenchmarkServingRequest,
+) -> dict[str, object]:
+    py_exe, py_meta = _resolve_benchmark_python_executable(
+        runtime=body.runtime,
+        presets_file=body.presets_file,
+        env_file=body.env_file,
+        preset=body.preset,
+        override_venv_path=body.override_venv_path,
+    )
+    argv = _serving_benchmark_argv(body)
+    full_argv = [py_exe, str(script), *argv]
     try:
         proc = _run_benchmark_script(
-            _BENCH_SGLANG_SCRIPT,
+            script,
             argv,
             python_executable=py_exe,
             timeout=float(body.subprocess_timeout_sec),
@@ -1246,7 +1265,7 @@ def api_benchmark_serving(body: BenchmarkServingRequest) -> dict[str, object]:
     except subprocess.TimeoutExpired:
         raise HTTPException(
             status_code=504,
-            detail=f"benchmark_sglang exceeded {body.subprocess_timeout_sec}s",
+            detail=f"{script_label} exceeded {body.subprocess_timeout_sec}s",
         ) from None
     return {
         "returncode": proc.returncode,
@@ -1256,6 +1275,16 @@ def api_benchmark_serving(body: BenchmarkServingRequest) -> dict[str, object]:
         "benchmark_python": py_exe,
         "benchmark_python_meta": py_meta,
     }
+
+
+@app.post("/api/benchmark/serving")
+def api_benchmark_serving(body: BenchmarkServingRequest) -> dict[str, object]:
+    return _run_serving_benchmark(_BENCH_SGLANG_SCRIPT, "benchmark_sglang", body)
+
+
+@app.post("/api/benchmark/vllm-serving")
+def api_benchmark_vllm_serving(body: BenchmarkVllmServingRequest) -> dict[str, object]:
+    return _run_serving_benchmark(_BENCH_VLLM_SCRIPT, "benchmark_vllm", body)
 
 
 @app.post("/api/benchmark/task")
