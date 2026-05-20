@@ -65,6 +65,18 @@ npm run dev
 
 Open the URL Vite prints (usually `http://127.0.0.1:5173`). API calls go to `/api` and are proxied to port 8765.
 
+When the backend runs on another host (e.g. DGX), do not put its IP in `vite.config.ts`. Copy
+`stack_ui/frontend/.env.example` to `.env.local` (gitignored) and set:
+
+```bash
+STACK_UI_API_TARGET=http://<dgx-host>:8765
+```
+
+Or one-shot: `STACK_UI_API_TARGET=http://<dgx-host>:8765 npm run dev`
+
+On the DGX, run the backend with `--host 0.0.0.0` and set `STACK_UI_CORS_ORIGINS` to include your
+dev UI origin (e.g. `http://<cpu-pc>:5173`).
+
 ## Single port (API + built UI)
 
 ```bash
